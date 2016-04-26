@@ -47,6 +47,8 @@ function davcnaStopnja(izvajalec, zanr) {
 
 // Prikaz seznama pesmi na strani
 streznik.get('/', function(zahteva, odgovor) {
+  if(!zahteva.session.stranka)
+    odgovor.redirect('/prijava');
   pb.all("SELECT Track.TrackId AS id, Track.Name AS pesem, \
           Artist.Name AS izvajalec, Track.UnitPrice * " +
           razmerje_usd_eur + " AS cena, \
@@ -112,6 +114,8 @@ var pesmiIzKosarice = function(zahteva, callback) {
 }
 
 streznik.get('/kosarica', function(zahteva, odgovor) {
+  if(!zahteva.session.stranka)
+    odgovor.redirect('/prijava');
   pesmiIzKosarice(zahteva, function(pesmi) {
     if (!pesmi)
       odgovor.sendStatus(500);
@@ -133,7 +137,10 @@ var pesmiIzRacuna = function(racunId, callback) {
     Track.TrackId IN (SELECT InvoiceLine.TrackId FROM InvoiceLine, Invoice \
     WHERE InvoiceLine.InvoiceId = Invoice.InvoiceId AND Invoice.InvoiceId = " + racunId + ")",
     function(napaka, vrstice) {
-      console.log(vrstice);
+      if(!napaka)
+        callback(vrstice);
+      else
+        callback(false);
     })
 }
 
@@ -142,13 +149,33 @@ var strankaIzRacuna = function(racunId, callback) {
     pb.all("SELECT Customer.* FROM Customer, Invoice \
             WHERE Customer.CustomerId = Invoice.CustomerId AND Invoice.InvoiceId = " + racunId,
     function(napaka, vrstice) {
-      console.log(vrstice);
+      if(!napaka)
+        callback(vrstice);
+      else
+        callback(false);
     })
 }
 
 // Izpis računa v HTML predstavitvi na podlagi podatkov iz baze
 streznik.post('/izpisiRacunBaza', function(zahteva, odgovor) {
-  odgovor.end();
+  var form = new formidable.IncomingForm();
+  
+  form.parse(zahteva, function(napaka1, polja, datoteke) {
+    pesmiIzRacuna(polja.seznamRacunov, function(pesmi) {
+      strankaIzRacuna(polja.seznamRacunov, function(stranka) {
+        if(!pesmi ||!stranka)
+          odgovor.sendStatus(500);
+        else {
+          odgovor.setHeader('content-type', 'text/xml');
+          odgovor.render('eslog', {
+            vizualiziraj: true,
+            postavkeRacuna: pesmi,
+            stranka: stranka[0]
+          })
+        }
+      });
+    });
+  });
 })
 
 // Izpis računa v HTML predstavitvi ali izvorni XML obliki
@@ -195,6 +222,7 @@ var vrniRacune = function(callback) {
   );
 }
 
+var sporocilo = "";
 // Registracija novega uporabnika
 streznik.post('/prijava', function(zahteva, odgovor) {
   var form = new formidable.IncomingForm();
@@ -211,11 +239,18 @@ streznik.post('/prijava', function(zahteva, odgovor) {
       //TODO: add fields and finalize
       //stmt.run("", "", "", "", "", "", "", "", "", "", "", 3); 
       //stmt.finalize();
+      stmt.run(polja.FirstName, polja.LastName, polja.Company, polja.Address, polja.City, polja.State, polja.Country, polja.PostalCode, polja.Phone, polja.Fax, polja.Email, 3);
+      stmt.finalize();
     } catch (err) {
       napaka2 = true;
     }
-  
-    odgovor.end();
+    
+    if(napaka1 || napaka2) 
+      sporocilo = "Prišlo je do napake pri registraciji nove stranke. Prosim preverite vnešene podatke in poskusite znova.";
+    else
+      sporocilo = "Stranka je bila uspešno registrirana.";
+      
+    odgovor.redirect('/prijava');
   });
 })
 
@@ -223,7 +258,8 @@ streznik.post('/prijava', function(zahteva, odgovor) {
 streznik.get('/prijava', function(zahteva, odgovor) {
   vrniStranke(function(napaka1, stranke) {
       vrniRacune(function(napaka2, racuni) {
-        odgovor.render('prijava', {sporocilo: "", seznamStrank: stranke, seznamRacunov: racuni});  
+        odgovor.render('prijava', {sporocilo: sporocilo, seznamStrank: stranke, seznamRacunov: racuni});  
+        sporocilo = "";
       }) 
     });
 })
@@ -233,12 +269,15 @@ streznik.post('/stranka', function(zahteva, odgovor) {
   var form = new formidable.IncomingForm();
   
   form.parse(zahteva, function (napaka1, polja, datoteke) {
+    zahteva.session.stranka = polja['seznamStrank'];
     odgovor.redirect('/')
   });
 })
 
 // Odjava stranke
 streznik.post('/odjava', function(zahteva, odgovor) {
+    zahteva.session.stranka = null;
+    zahteva.session.destroy();
     odgovor.redirect('/prijava') 
 })
 
